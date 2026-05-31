@@ -1,0 +1,45 @@
+# Environments
+.venv/
+
+# cache
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Docker
+.db_data/
+pgdata/
+
+# Secrets
+*.env
+.env
+.env.*
+!.env.example
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+
+# workspace metadata
+.cursor/
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Frontend
+node_modules/
+.next/
+out/
+build/
+dist/
+.npm
+*.log
