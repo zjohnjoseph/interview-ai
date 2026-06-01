@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ./backend/app:/app/app
+      - ./backend:/app
     depends_on:
       db:
         condition: service_healthy
