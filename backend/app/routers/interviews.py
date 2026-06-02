@@ -209,3 +209,16 @@ async def remove_question(
     if iq is None:
         raise HTTPException(status_code=404, detail="Question not attached to this interview")
     await db.delete(iq)
+
+
+@router.get("/{interview_id}/sessions", response_model=list[SessionResponse])
+async def list_sessions(
+    interview_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[CandidateSession]:
+    await _get_owned_interview(interview_id, current_user, db)
+    result = await db.execute(
+        select(CandidateSession).where(CandidateSession.interview_id == interview_id)
+    )
+    return list(result.scalars().all())

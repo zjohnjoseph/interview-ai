@@ -130,6 +130,8 @@ class SessionProgressResponse(BaseModel):
     current_score: float | None = None
 
 
+
+
 # ─── 3.5 ANSWERS & EVALUATION ────────────────────────────────
 
 class AnswerSubmit(BaseModel):
@@ -163,6 +165,21 @@ class ResponseDetail(BaseModel):
     feedback: str | None
     latency_ms: int | None
     created_at: datetime
+
+
+# ─── 3.5b CANDIDATE FLOW ─────────────────────────────────────
+
+class NextQuestionResponse(BaseModel):
+    completed: bool
+    question: QuestionResponse | None
+    questions_remaining: int
+
+
+class AnswerResponse(BaseModel):
+    response_id: uuid.UUID
+    question_text: str
+    evaluation: EvaluationResponse
+    is_last_question: bool
 
 
 # ─── 3.6 RESULTS ─────────────────────────────────────────────
