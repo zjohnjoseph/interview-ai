@@ -33,7 +33,7 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="interviewer")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
     # Relationships
@@ -57,7 +57,7 @@ class Question(Base):
     reference_answer: Mapped[str] = mapped_column(Text, nullable=False)
     embedding = mapped_column(Vector(768), nullable=True)  # Jina v3
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
     # Relationships
@@ -83,7 +83,7 @@ class Interview(Base):
     difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
 
     # Relationships
@@ -136,13 +136,13 @@ class CandidateSession(Base):
     )
     status: Mapped[str] = mapped_column(String(20), default="pending")
     started_at: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True
+        DateTime(timezone=True), nullable=True
     )
     completed_at: Mapped[datetime | None] = mapped_column(
-        DateTime, nullable=True
+        DateTime(timezone=True), nullable=True
     )
     expires_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False
+        DateTime(timezone=True), nullable=False
     )
 
     # Relationships
@@ -179,5 +179,7 @@ class Response(Base):
         Integer, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    session: Mapped["CandidateSession"] = relationship(back_populates="responses")
+    question: Mapped["Question"] = relationship()
