@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     DateTime,
@@ -33,7 +33,7 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), default="interviewer")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
+        DateTime, default=lambda: datetime.now(timezone.utc)
     )
 
     # Relationships
@@ -57,7 +57,12 @@ class Question(Base):
     reference_answer: Mapped[str] = mapped_column(Text, nullable=False)
     embedding = mapped_column(Vector(768), nullable=True)  # Jina v3
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+    # Relationships
+    interview_questions: Mapped[list["InterviewQuestion"]] = relationship(
+        back_populates="question"
     )
 
 
@@ -78,13 +83,18 @@ class Interview(Base):
     difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft")
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
+        DateTime, default=lambda: datetime.now(timezone.utc)
     )
 
     # Relationships
     owner: Mapped["User"] = relationship(back_populates="interviews")
     sessions: Mapped[list["CandidateSession"]] = relationship(
         back_populates="interview", cascade="all, delete-orphan"
+    )
+    interview_questions: Mapped[list["InterviewQuestion"]] = relationship(
+        back_populates="interview",
+        cascade="all, delete-orphan",
+        order_by="InterviewQuestion.order",
     )
 
 
@@ -99,6 +109,10 @@ class InterviewQuestion(Base):
         ForeignKey("questions.id"), primary_key=True
     )
     order: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # Relationships
+    interview: Mapped["Interview"] = relationship(back_populates="interview_questions")
+    question: Mapped["Question"] = relationship(back_populates="interview_questions")
 
 
 # ─── 5. CANDIDATE SESSIONS ──────────────────────────────────
@@ -165,5 +179,5 @@ class Response(Base):
         Integer, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow
+        DateTime, default=lambda: datetime.now(timezone.utc)
     )

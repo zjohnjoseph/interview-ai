@@ -43,3 +43,6 @@ build/
 dist/
 .npm
 *.log
+
+# Progress
+Progress.md
