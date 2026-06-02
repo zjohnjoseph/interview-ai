@@ -47,6 +47,15 @@ class InterviewUpdate(BaseModel):
     difficulty: Literal["junior", "mid", "senior"] | None = None
 
 
+class QuestionOrderItem(BaseModel):
+    question_id: uuid.UUID
+    order: int = Field(ge=1)
+
+
+class AttachQuestionsRequest(BaseModel):
+    questions: list[QuestionOrderItem] = Field(min_length=1)
+
+
 class InterviewResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
