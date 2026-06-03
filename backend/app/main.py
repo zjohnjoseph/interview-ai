@@ -10,7 +10,7 @@ from app.routers.sessions import router as candidate_router
 
 app = FastAPI(title="Interview AI Core")
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 app.add_middleware(SlowAPIMiddleware)
 app.include_router(auth_router)
 app.include_router(sessions_router)

@@ -6,14 +6,30 @@ requires-python = ">=3.11"
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B"]
+ignore = [
+    "B008",   # FastAPI uses Depends() in function signatures — intentional pattern
+    "UP017",  # datetime.UTC alias (datetime.timezone.utc is equally valid)
+]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 warn_return_any = true
 disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["jose.*", "pgvector.*", "slowapi.*", "asyncpg.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false

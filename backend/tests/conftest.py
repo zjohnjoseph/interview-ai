@@ -1,0 +1,165 @@
+import asyncio
+import os
+from collections.abc import AsyncGenerator
+
+import asyncpg  # type: ignore[import]
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    "postgresql+asyncpg://interviewai:localdev123@localhost:5432/interviewai_test",
+)
+# Picked up by alembic/env.py when running migrations during setup
+os.environ["TEST_DATABASE_URL"] = TEST_DATABASE_URL
+
+_test_engine = create_async_engine(TEST_DATABASE_URL, echo=False, pool_size=5)
+_test_session_factory = async_sessionmaker(_test_engine, expire_on_commit=False)
+
+_TRUNCATE = text(
+    "TRUNCATE responses, candidate_sessions, interview_questions, "
+    "interviews, questions, users RESTART IDENTITY CASCADE"
+)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_test_database() -> None:
+    """Create interviewai_test DB, enable pgvector, run Alembic migrations — once per session."""
+    no_driver = TEST_DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+    admin_dsn = no_driver.rsplit("/", 1)[0] + "/postgres"
+    test_dsn = no_driver
+
+    async def _prepare() -> None:
+        conn = await asyncpg.connect(admin_dsn)
+        try:
+            await conn.execute("CREATE DATABASE interviewai_test")
+        except asyncpg.exceptions.DuplicateDatabaseError:
+            pass
+        finally:
+            await conn.close()
+
+        conn = await asyncpg.connect(test_dsn)
+        try:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        finally:
+            await conn.close()
+
+    asyncio.run(_prepare())
+
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config("alembic.ini")
+    command.upgrade(cfg, "head")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def disable_rate_limiter() -> None:
+    """Disable slowapi rate limiting so tests can call auth endpoints freely."""
+    from app.routers.auth import limiter
+
+    limiter.enabled = False
+
+
+@pytest_asyncio.fixture
+async def db_session() -> AsyncGenerator[AsyncSession, None]:
+    """Raw DB session for direct manipulation (e.g. setting expires_at to the past).
+    Disposes the pool first so this test always gets fresh connections in its event loop
+    (pytest-asyncio creates a new event loop per test by default; without dispose, the
+    pool reuses connections from the previous loop and asyncpg raises InterfaceError).
+    Teardown truncates all tables so the next test starts clean."""
+    await _test_engine.dispose()  # clear stale connections from previous test's event loop
+
+    async with _test_session_factory() as session:
+        yield session
+
+    async with _test_session_factory() as cleanup:
+        await cleanup.execute(_TRUNCATE)
+        await cleanup.commit()
+
+
+@pytest_asyncio.fixture
+async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+    """Async HTTP client with the FastAPI app and test DB wired up.
+    Depends on db_session to ensure cleanup runs after the client closes."""
+    from app.database import get_db
+    from app.main import app
+
+    async def _override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        async with _test_session_factory() as s:
+            try:
+                yield s
+                await s.commit()
+            except Exception:
+                await s.rollback()
+                raise
+
+    app.dependency_overrides[get_db] = _override_get_db
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test", follow_redirects=True
+    ) as ac:
+        yield ac
+
+    app.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def auth_headers(client: AsyncClient) -> dict[str, str]:
+    """Signs up a test user and returns Bearer auth headers."""
+    r = await client.post(
+        "/api/auth/signup",
+        json={"email": "tester@example.com", "name": "Test User", "password": "strongpass123"},
+    )
+    assert r.status_code == 200
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+@pytest_asyncio.fixture
+async def sample_interview(client: AsyncClient, auth_headers: dict[str, str]) -> dict:
+    """Full setup: 3 questions + interview + published session.
+    Returns ids, token, session_id, and auth_headers for use in tests."""
+    question_ids = []
+    for i in range(3):
+        r = await client.post(
+            "/api/questions",
+            json={
+                "text": f"Explain Python concept number {i + 1} in sufficient detail for an interview.",
+                "domain": "python",
+                "difficulty": "medium",
+                "reference_answer": "A thorough reference answer that exceeds twenty characters.",
+            },
+            headers=auth_headers,
+        )
+        assert r.status_code == 201
+        question_ids.append(r.json()["id"])
+
+    r = await client.post(
+        "/api/interviews",
+        json={"title": "Sample Test Interview", "topics": ["python"], "difficulty": "mid"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 201
+    interview_id = r.json()["id"]
+
+    r = await client.post(
+        f"/api/interviews/{interview_id}/questions",
+        json={"questions": [{"question_id": qid, "order": i + 1} for i, qid in enumerate(question_ids)]},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200
+
+    r = await client.post(f"/api/interviews/{interview_id}/publish", headers=auth_headers)
+    assert r.status_code == 200
+    data = r.json()
+
+    return {
+        "interview_id": interview_id,
+        "question_ids": question_ids,
+        "token": data["token"],
+        "session_id": data["id"],
+        "auth_headers": auth_headers,
+    }

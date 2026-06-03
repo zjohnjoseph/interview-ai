@@ -4,7 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-
 # ─── 3.1 AUTH ────────────────────────────────────────────────
 
 class SignupRequest(BaseModel):
