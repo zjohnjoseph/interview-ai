@@ -23,5 +23,11 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     jina_api_key: str = ""
 
+    # LLM model settings
+    groq_model: str = "llama-3.3-70b-versatile"
+    gemini_model: str = "gemini-2.0-flash"
+    llm_temperature: float = 0.3
+    llm_max_tokens: int = 1024
+
 
 settings = Settings()

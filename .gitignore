@@ -46,3 +46,5 @@ dist/
 
 # Progress
 Progress.md
+
+backend/logs/
