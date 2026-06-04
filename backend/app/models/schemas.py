@@ -35,33 +35,30 @@ class UserResponse(BaseModel):
 # ─── 3.2 INTERVIEWS ──────────────────────────────────────────
 
 class InterviewCreate(BaseModel):
-    title: str = Field(min_length=3, max_length=200)
-    topics: list[str] = Field(min_length=1)
-    difficulty: Literal["junior", "mid", "senior"]
+    job_title: str = Field(min_length=3, max_length=200)
+    job_description: str = Field(min_length=50)
+    required_skills: str = Field(min_length=5)
+    role_level: Literal["junior", "mid", "senior"]
+    max_questions: int = Field(default=10, ge=8, le=15)
 
 
 class InterviewUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=3, max_length=200)
-    topics: list[str] | None = None
-    difficulty: Literal["junior", "mid", "senior"] | None = None
-
-
-class QuestionOrderItem(BaseModel):
-    question_id: uuid.UUID
-    order: int = Field(ge=1)
-
-
-class AttachQuestionsRequest(BaseModel):
-    questions: list[QuestionOrderItem] = Field(min_length=1)
+    job_title: str | None = Field(default=None, min_length=3, max_length=200)
+    job_description: str | None = Field(default=None, min_length=50)
+    required_skills: str | None = Field(default=None, min_length=5)
+    role_level: Literal["junior", "mid", "senior"] | None = None
+    max_questions: int | None = Field(default=None, ge=8, le=15)
 
 
 class InterviewResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
-    title: str
-    topics: list[str]
-    difficulty: str
+    job_title: str
+    job_description: str
+    required_skills: str
+    role_level: str
+    max_questions: int
     status: str
     created_at: datetime
 
@@ -129,8 +126,6 @@ class SessionProgressResponse(BaseModel):
     current_score: float | None = None
 
 
-
-
 # ─── 3.5 ANSWERS & EVALUATION ────────────────────────────────
 
 class AnswerSubmit(BaseModel):
@@ -147,15 +142,12 @@ class EvaluationResponse(BaseModel):
 
 
 class ResponseDetail(BaseModel):
-    """
-    Single answer + evaluation for results view.
-    question_text comes from a JOIN — not a column on responses.
-    Service must pass it explicitly via model_validate({...}).
-    """
+    """Single answer + evaluation. question_text and is_follow_up are columns on responses."""
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     question_text: str
+    is_follow_up: bool
     answer_text: str
     score: float | None
     accuracy: float | None

@@ -22,7 +22,7 @@ disallow_untyped_defs = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["jose.*", "pgvector.*", "slowapi.*", "asyncpg.*"]
+module = ["jose.*", "pgvector.*", "slowapi.*", "asyncpg.*", "fitz.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

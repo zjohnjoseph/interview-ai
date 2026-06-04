@@ -4,15 +4,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.auth.dependencies import get_current_session, get_current_user
 from app.database import get_db
 from app.models.database_models import (
     CandidateSession,
     Interview,
-    InterviewQuestion,
-    Question,
     Response,
     User,
 )
@@ -29,28 +26,8 @@ from app.models.schemas import (
 
 router = APIRouter(prefix="/api/sessions", tags=["Sessions"])
 
-
-async def _get_next_iq(
-    session: CandidateSession, db: AsyncSession
-) -> tuple[InterviewQuestion | None, int]:
-    iqs = list(
-        (
-            await db.execute(
-                select(InterviewQuestion)
-                .where(InterviewQuestion.interview_id == session.interview_id)
-                .order_by(InterviewQuestion.order)
-            )
-        ).scalars().all()
-    )
-    answered_ids = set(
-        (
-            await db.execute(
-                select(Response.question_id).where(Response.session_id == session.id)
-            )
-        ).scalars().all()
-    )
-    remaining = [iq for iq in iqs if iq.question_id not in answered_ids]
-    return (remaining[0] if remaining else None, len(remaining))
+_STUB_QUESTION_TEXT = "Placeholder — LLM question generation coming in Phase 2"
+_STUB_QUESTION_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
 
 @router.get("/{token}/next", response_model=NextQuestionResponse)
@@ -64,17 +41,26 @@ async def get_next_question(
     if session.status == "completed":
         return NextQuestionResponse(completed=True, question=None, questions_remaining=0)
 
-    next_iq, remaining = await _get_next_iq(session, db)
-    if next_iq is None:
-        return NextQuestionResponse(completed=True, question=None, questions_remaining=0)
-
-    question = (
-        await db.execute(select(Question).where(Question.id == next_iq.question_id))
+    interview = (
+        await db.execute(select(Interview).where(Interview.id == session.interview_id))
     ).scalar_one()
+    answered = (
+        await db.execute(select(func.count()).where(Response.session_id == session.id))
+    ).scalar_one()
+    remaining = interview.max_questions - answered
+
+    if remaining <= 0:
+        return NextQuestionResponse(completed=True, question=None, questions_remaining=0)
 
     return NextQuestionResponse(
         completed=False,
-        question=QuestionResponse.model_validate(question),
+        question=QuestionResponse(
+            id=_STUB_QUESTION_UUID,
+            text=_STUB_QUESTION_TEXT,
+            domain="python",
+            difficulty="medium",
+            created_at=datetime.now(timezone.utc),
+        ),
         questions_remaining=remaining,
     )
 
@@ -91,14 +77,17 @@ async def submit_answer(
     if session.status == "completed":
         raise HTTPException(status_code=400, detail="Interview already completed")
 
-    next_iq, remaining = await _get_next_iq(session, db)
-    if next_iq is None:
+    interview = (
+        await db.execute(select(Interview).where(Interview.id == session.interview_id))
+    ).scalar_one()
+    answered = (
+        await db.execute(select(func.count()).where(Response.session_id == session.id))
+    ).scalar_one()
+
+    if answered >= interview.max_questions:
         raise HTTPException(status_code=400, detail="No more questions to answer")
 
-    is_last = remaining == 1
-    question = (
-        await db.execute(select(Question).where(Question.id == next_iq.question_id))
-    ).scalar_one()
+    is_last = (answered + 1) >= interview.max_questions
 
     placeholder = EvaluationResponse(
         score=0.0,
@@ -109,7 +98,9 @@ async def submit_answer(
     )
     response = Response(
         session_id=session.id,
-        question_id=question.id,
+        question_id=None,
+        question_text=_STUB_QUESTION_TEXT,
+        is_follow_up=False,
         answer_text=body.answer_text,
         score=placeholder.score,
         accuracy=placeholder.accuracy,
@@ -127,7 +118,7 @@ async def submit_answer(
 
     return AnswerResponse(
         response_id=response.id,
-        question_text=question.text,
+        question_text=_STUB_QUESTION_TEXT,
         evaluation=placeholder,
         is_last_question=is_last,
     )
@@ -139,12 +130,8 @@ async def get_progress(
     session: CandidateSession = Depends(get_current_session),
     db: AsyncSession = Depends(get_db),
 ) -> SessionProgressResponse:
-    total = (
-        await db.execute(
-            select(func.count()).where(
-                InterviewQuestion.interview_id == session.interview_id
-            )
-        )
+    interview = (
+        await db.execute(select(Interview).where(Interview.id == session.interview_id))
     ).scalar_one()
 
     scores = list(
@@ -158,7 +145,7 @@ async def get_progress(
     current_score = sum(non_null) / len(non_null) if non_null else None
 
     return SessionProgressResponse(
-        total_questions=total,
+        total_questions=interview.max_questions,
         answered_questions=len(scores),
         current_score=current_score,
     )
@@ -191,37 +178,11 @@ async def get_results(
 
     responses = list(
         (
-            await db.execute(
-                select(Response)
-                .where(Response.session_id == session.id)
-                .options(selectinload(Response.question))
-            )
+            await db.execute(select(Response).where(Response.session_id == session.id))
         ).scalars().all()
     )
 
-    total = (
-        await db.execute(
-            select(func.count()).where(
-                InterviewQuestion.interview_id == session.interview_id
-            )
-        )
-    ).scalar_one()
-
-    details = [
-        ResponseDetail.model_validate({
-            "id": r.id,
-            "question_text": r.question.text,
-            "answer_text": r.answer_text,
-            "score": r.score,
-            "accuracy": r.accuracy,
-            "completeness": r.completeness,
-            "clarity": r.clarity,
-            "feedback": r.feedback,
-            "latency_ms": r.latency_ms,
-            "created_at": r.created_at,
-        })
-        for r in responses
-    ]
+    details = [ResponseDetail.model_validate(r) for r in responses]
 
     non_null_scores = [r.score for r in responses if r.score is not None]
     overall = sum(non_null_scores) / len(non_null_scores) if non_null_scores else 0.0
@@ -231,7 +192,7 @@ async def get_results(
         candidate_name=session.candidate_name,
         candidate_email=session.candidate_email,
         overall_score=overall,
-        total_questions=total,
+        total_questions=interview.max_questions,
         answered_questions=len(responses),
         responses=details,
         started_at=session.started_at,

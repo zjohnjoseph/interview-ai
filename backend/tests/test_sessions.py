@@ -3,6 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _CANDIDATE = {"candidate_name": "Alice Smith", "candidate_email": "alice@example.com"}
+_STUB_TEXT = "Placeholder — LLM question generation coming in Phase 2"
 
 
 async def test_join_session(client: AsyncClient, sample_interview: dict) -> None:
@@ -30,8 +31,9 @@ async def test_get_next_question(client: AsyncClient, sample_interview: dict) ->
     data = r.json()
     assert data["completed"] is False
     assert data["question"] is not None
+    assert data["question"]["text"] == _STUB_TEXT
     assert "reference_answer" not in data["question"]
-    assert data["questions_remaining"] == 3
+    assert data["questions_remaining"] == 8  # max_questions with no answers yet
 
 
 async def test_submit_answer(client: AsyncClient, sample_interview: dict) -> None:
@@ -40,7 +42,7 @@ async def test_submit_answer(client: AsyncClient, sample_interview: dict) -> Non
 
     r = await client.post(
         f"/api/sessions/{token}/answers",
-        json={"answer_text": "This is my answer to the first question."},
+        json={"answer_text": "This is my answer to the stub question."},
     )
     assert r.status_code == 200
     data = r.json()
@@ -53,13 +55,13 @@ async def test_full_interview_flow(client: AsyncClient, sample_interview: dict) 
     token = sample_interview["token"]
     await client.post(f"/api/sessions/{token}/join", json=_CANDIDATE)
 
-    for i in range(3):
+    for i in range(8):  # max_questions = 8
         r = await client.post(
             f"/api/sessions/{token}/answers",
-            json={"answer_text": f"My answer to question {i + 1}."},
+            json={"answer_text": f"My answer to stub question {i + 1}."},
         )
         assert r.status_code == 200
-        assert r.json()["is_last_question"] is (i == 2)
+        assert r.json()["is_last_question"] is (i == 7)
 
     r = await client.get(f"/api/sessions/{token}/next")
     assert r.status_code == 200
@@ -71,7 +73,7 @@ async def test_full_interview_flow(client: AsyncClient, sample_interview: dict) 
 async def test_answer_after_completion(client: AsyncClient, sample_interview: dict) -> None:
     token = sample_interview["token"]
     await client.post(f"/api/sessions/{token}/join", json=_CANDIDATE)
-    for i in range(3):
+    for i in range(8):
         await client.post(
             f"/api/sessions/{token}/answers",
             json={"answer_text": f"Answer {i}."},
@@ -98,7 +100,7 @@ async def test_results_after_completion(
     auth_headers = sample_interview["auth_headers"]
 
     await client.post(f"/api/sessions/{token}/join", json=_CANDIDATE)
-    for i in range(3):
+    for i in range(8):
         await client.post(
             f"/api/sessions/{token}/answers",
             json={"answer_text": f"Answer {i}."},
@@ -107,11 +109,13 @@ async def test_results_after_completion(
     r = await client.get(f"/api/sessions/{session_id}/results", headers=auth_headers)
     assert r.status_code == 200
     data = r.json()
-    assert data["answered_questions"] == 3
-    assert data["total_questions"] == 3
-    assert len(data["responses"]) == 3
+    assert data["answered_questions"] == 8
+    assert data["total_questions"] == 8
+    assert len(data["responses"]) == 8
     for resp in data["responses"]:
-        assert resp["question_text"] != ""
+        assert resp["question_text"] == _STUB_TEXT
+        assert "is_follow_up" in resp
+        assert resp["is_follow_up"] is False
 
 
 async def test_results_ownership(client: AsyncClient, sample_interview: dict) -> None:

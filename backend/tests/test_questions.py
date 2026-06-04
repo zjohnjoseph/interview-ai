@@ -61,32 +61,3 @@ async def test_list_questions_pagination(
     r = await client.get("/api/questions?limit=2", headers=auth_headers)
     assert r.status_code == 200
     assert len(r.json()) == 2
-
-
-async def test_attach_questions_to_interview(
-    client: AsyncClient, auth_headers: dict[str, str]
-) -> None:
-    q_ids = []
-    for _ in range(3):
-        r = await client.post("/api/questions", json=_PYTHON_Q, headers=auth_headers)
-        assert r.status_code == 201
-        q_ids.append(r.json()["id"])
-
-    r = await client.post(
-        "/api/interviews",
-        json={"title": "Attachment Test Interview", "topics": ["python"], "difficulty": "junior"},
-        headers=auth_headers,
-    )
-    assert r.status_code == 201
-    interview_id = r.json()["id"]
-
-    r = await client.post(
-        f"/api/interviews/{interview_id}/questions",
-        json={"questions": [{"question_id": qid, "order": i + 1} for i, qid in enumerate(q_ids)]},
-        headers=auth_headers,
-    )
-    assert r.status_code == 200
-
-    # Verify that publishing now succeeds (requires >= 1 question)
-    r = await client.post(f"/api/interviews/{interview_id}/publish", headers=auth_headers)
-    assert r.status_code == 200

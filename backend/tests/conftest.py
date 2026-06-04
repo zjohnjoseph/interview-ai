@@ -25,6 +25,18 @@ _TRUNCATE = text(
 )
 
 
+def _make_test_pdf() -> bytes:
+    """Create a minimal valid PDF using PyMuPDF for upload tests."""
+    import fitz  # type: ignore[import]
+
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text(
+        (72, 72), "Senior Python Developer\nSkills: Python, FastAPI, PostgreSQL, Redis"
+    )
+    return doc.tobytes()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_database() -> None:
     """Create interviewai_test DB, enable pgvector, run Alembic migrations — once per session."""
@@ -118,48 +130,42 @@ async def auth_headers(client: AsyncClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
+_INTERVIEW_PAYLOAD = {
+    "job_title": "Senior Python Developer",
+    "job_description": (
+        "We are building a high-scale distributed platform and need an experienced "
+        "Python developer with strong backend and system design skills."
+    ),
+    "required_skills": "Python, FastAPI, PostgreSQL, Redis, system design",
+    "role_level": "senior",
+    "max_questions": 8,
+}
+
+
 @pytest_asyncio.fixture
 async def sample_interview(client: AsyncClient, auth_headers: dict[str, str]) -> dict:
-    """Full setup: 3 questions + interview + published session.
-    Returns ids, token, session_id, and auth_headers for use in tests."""
-    question_ids = []
-    for i in range(3):
-        r = await client.post(
-            "/api/questions",
-            json={
-                "text": f"Explain Python concept number {i + 1} in sufficient detail for an interview.",
-                "domain": "python",
-                "difficulty": "medium",
-                "reference_answer": "A thorough reference answer that exceeds twenty characters.",
-            },
-            headers=auth_headers,
-        )
-        assert r.status_code == 201
-        question_ids.append(r.json()["id"])
-
-    r = await client.post(
-        "/api/interviews",
-        json={"title": "Sample Test Interview", "topics": ["python"], "difficulty": "mid"},
-        headers=auth_headers,
-    )
+    """Interview + published + candidate session with uploaded resume.
+    Returns {interview_id, session_id, token, auth_headers}."""
+    r = await client.post("/api/interviews", json=_INTERVIEW_PAYLOAD, headers=auth_headers)
     assert r.status_code == 201
     interview_id = r.json()["id"]
 
-    r = await client.post(
-        f"/api/interviews/{interview_id}/questions",
-        json={"questions": [{"question_id": qid, "order": i + 1} for i, qid in enumerate(question_ids)]},
-        headers=auth_headers,
-    )
-    assert r.status_code == 200
-
     r = await client.post(f"/api/interviews/{interview_id}/publish", headers=auth_headers)
     assert r.status_code == 200
+
+    pdf_bytes = _make_test_pdf()
+    r = await client.post(
+        f"/api/interviews/{interview_id}/candidates",
+        data={"candidate_name": "Test Candidate", "candidate_email": "candidate@example.com"},
+        files={"resume": ("resume.pdf", pdf_bytes, "application/pdf")},
+        headers=auth_headers,
+    )
+    assert r.status_code == 201
     data = r.json()
 
     return {
         "interview_id": interview_id,
-        "question_ids": question_ids,
-        "token": data["token"],
         "session_id": data["id"],
+        "token": data["token"],
         "auth_headers": auth_headers,
     }
