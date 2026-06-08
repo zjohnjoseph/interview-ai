@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -7,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models.database_models import Question, User
-from app.models.schemas import QuestionCreate, QuestionDetailResponse
+from app.models.schemas import QuestionCreate, QuestionDetailResponse, SearchResultResponse
+from app.services.rag_service import rag_service
 
 router = APIRouter(prefix="/api/questions", tags=["Questions"])
 
@@ -49,6 +51,24 @@ async def list_questions(
     query = query.offset(skip).limit(limit)
     result = await db.execute(query)
     return list(result.scalars().all())
+
+
+@router.get("/search", response_model=list[SearchResultResponse])
+async def search_questions(
+    q: str = Query(..., min_length=1, description="Semantic search query"),
+    domain: str | None = None,
+    difficulty: str | None = None,
+    limit: int = Query(default=5, ge=1, le=20),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[dict[str, Any]]:
+    return await rag_service.search_similar_questions(
+        query=q,
+        db=db,
+        domain=domain,
+        difficulty=difficulty,
+        limit=limit,
+    )
 
 
 @router.get("/{question_id}", response_model=QuestionDetailResponse)

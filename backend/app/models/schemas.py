@@ -158,6 +158,17 @@ class ResponseDetail(BaseModel):
     created_at: datetime
 
 
+# ─── 3.5a RAG SEARCH ─────────────────────────────────────────
+
+class SearchResultResponse(BaseModel):
+    question_id: str
+    text: str
+    domain: str
+    difficulty: str
+    reference_answer: str
+    similarity_score: float
+
+
 # ─── 3.5b CANDIDATE FLOW ─────────────────────────────────────
 
 class NextQuestionResponse(BaseModel):

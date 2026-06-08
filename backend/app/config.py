@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     gemini_api_key: str = ""
     jina_api_key: str = ""
+    jina_embedding_model: str = "jina-embeddings-v3"
+    jina_reranker_model: str = "jina-reranker-v2-base-multilingual"
+    embedding_dimension: int = 768
 
     # LLM model settings
     groq_model: str = "llama-3.3-70b-versatile"
