@@ -24,6 +24,7 @@ def _is_retryable(exc: BaseException) -> bool:
 
 class EmbeddingService:
     JINA_EMBED_URL = "https://api.jina.ai/v1/embeddings"
+    JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
 
     def __init__(self) -> None:
         self.total_tokens: int = 0
@@ -93,6 +94,34 @@ class EmbeddingService:
             extra={"count": len(texts), "tokens": tokens, "latency_ms": latency_ms},
         )
         return vectors, tokens
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=4),
+        retry=retry_if_exception(_is_retryable),
+        reraise=True,
+    )
+    async def rerank(
+        self, query: str, documents: list[str], top_n: int = 5
+    ) -> list[dict[str, Any]]:
+        payload: dict[str, Any] = {
+            "model": settings.jina_reranker_model,
+            "query": query,
+            "documents": documents,
+            "top_n": top_n,
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                self.JINA_RERANK_URL,
+                json=payload,
+                headers={"Authorization": f"Bearer {settings.jina_api_key}"},
+            )
+            response.raise_for_status()
+        data: dict[str, Any] = response.json()
+        return [
+            {"index": item["index"], "relevance_score": item["relevance_score"]}
+            for item in data["results"]
+        ]
 
 
 embedding_service = EmbeddingService()

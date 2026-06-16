@@ -62,7 +62,7 @@ async def search_questions(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict[str, Any]]:
-    return await rag_service.search_similar_questions(
+    return await rag_service.hybrid_search(
         query=q,
         db=db,
         domain=domain,

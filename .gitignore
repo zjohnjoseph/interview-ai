@@ -48,3 +48,5 @@ dist/
 Progress.md
 
 backend/logs/
+
+graphify-out/

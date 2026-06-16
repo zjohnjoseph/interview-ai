@@ -11,7 +11,7 @@ from sqlalchemy import (
     String,
     Text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -54,6 +54,7 @@ class Question(Base):
     difficulty: Mapped[str] = mapped_column(String(20), nullable=False)
     reference_answer: Mapped[str] = mapped_column(Text, nullable=False)
     embedding = mapped_column(Vector(768), nullable=True)  # Jina v3 — Phase 2
+    search_vector = mapped_column(TSVECTOR, nullable=True)  # BM25 — Phase 2
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

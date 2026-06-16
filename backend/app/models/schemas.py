@@ -166,7 +166,8 @@ class SearchResultResponse(BaseModel):
     domain: str
     difficulty: str
     reference_answer: str
-    similarity_score: float
+    relevance_score: float
+    source: str  # "vector", "bm25", or "both"
 
 
 # ─── 3.5b CANDIDATE FLOW ─────────────────────────────────────
