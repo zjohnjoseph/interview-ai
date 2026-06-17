@@ -20,3 +20,5 @@ mypy==1.13.*
 groq>=0.12.0
 google-genai>=1.0.0
 tenacity>=9.0.0
+langgraph>=0.2.0
+langchain-core>=0.3.0

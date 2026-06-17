@@ -37,3 +37,7 @@ disallow_untyped_defs = false
 [[tool.mypy.overrides]]
 module = ["groq.*", "google.*", "tenacity.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["langgraph.*", "langchain_core.*"]
+ignore_missing_imports = true
