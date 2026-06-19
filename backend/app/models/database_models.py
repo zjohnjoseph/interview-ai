@@ -156,6 +156,7 @@ class Response(Base):
     )
     question_text: Mapped[str] = mapped_column(Text, nullable=False)
     is_follow_up: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    domain: Mapped[str | None] = mapped_column(String(50), nullable=True)
     answer_text: Mapped[str] = mapped_column(Text, nullable=False)
     score: Mapped[float | None] = mapped_column(Float, nullable=True)
     accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
