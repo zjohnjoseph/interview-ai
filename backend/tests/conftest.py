@@ -16,6 +16,9 @@ TEST_DATABASE_URL = os.getenv(
 # Picked up by alembic/env.py when running migrations during setup
 os.environ["TEST_DATABASE_URL"] = TEST_DATABASE_URL
 
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+os.environ["REDIS_URL"] = REDIS_URL
+
 _test_engine = create_async_engine(TEST_DATABASE_URL, echo=False, pool_size=5)
 _test_session_factory = async_sessionmaker(_test_engine, expire_on_commit=False)
 
@@ -132,6 +135,33 @@ def mock_llm_and_rag(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(llm_service, "call_llm", fake_call_llm)
     monkeypatch.setattr(rag_service, "hybrid_search", fake_hybrid_search)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def reset_redis() -> AsyncGenerator[None, None]:
+    """Give each test a fresh Redis client bound to its own event loop and a clean
+    keyspace. pytest-asyncio uses a new loop per test, so a module-level client from
+    a previous test would hold connections bound to a closed loop. We rebind the
+    singleton's client and flush the ``interviewai:`` namespace so cached evals/states
+    never leak between tests (the mocked LLM is deterministic, so a stale eval cache
+    would otherwise silently satisfy a different test)."""
+    import redis.asyncio as aioredis
+
+    from app.services.redis_service import redis_service
+
+    redis_service._client = aioredis.from_url(REDIS_URL, decode_responses=True)
+
+    async def _flush() -> None:
+        try:
+            keys = [k async for k in redis_service._client.scan_iter(match="interviewai:*")]
+            if keys:
+                await redis_service._client.delete(*keys)
+        except Exception:
+            pass  # Redis unavailable — degradation tests still pass
+
+    await _flush()
+    yield
+    await _flush()
 
 
 @pytest_asyncio.fixture

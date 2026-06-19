@@ -18,8 +18,11 @@ from app.models.schemas import (
     SessionProgressResponse,
     SessionResultResponse,
 )
+from app.services.guardrails import TokenBudgetExceededError
 from app.services.interview_service import NoQuestionPendingError, interview_service
 from app.services.llm_service import LLMProviderError
+
+_BUDGET_DETAIL = "Service capacity reached. Please try again tomorrow."
 
 router = APIRouter(prefix="/api/sessions", tags=["Sessions"])
 
@@ -44,6 +47,8 @@ async def get_next_question(
     interview = await _load_interview(session, db)
     try:
         return await interview_service.get_next_question(session, interview, db)
+    except TokenBudgetExceededError:
+        raise HTTPException(status_code=503, detail=_BUDGET_DETAIL) from None
     except LLMProviderError:
         raise HTTPException(
             status_code=503,
@@ -68,6 +73,8 @@ async def submit_answer(
         return await interview_service.evaluate_and_record(
             session, interview, body.answer_text, db
         )
+    except TokenBudgetExceededError:
+        raise HTTPException(status_code=503, detail=_BUDGET_DETAIL) from None
     except NoQuestionPendingError:
         raise HTTPException(
             status_code=400, detail="No question pending. Call /next first."

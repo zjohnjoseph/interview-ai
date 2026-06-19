@@ -41,3 +41,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["langgraph.*", "langchain_core.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["redis.*"]
+ignore_missing_imports = true

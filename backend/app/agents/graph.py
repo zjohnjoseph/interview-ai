@@ -67,6 +67,30 @@ def build_evaluation_graph() -> Any:
     return graph.compile()
 
 
+def build_routing_graph() -> Any:
+    """Decide on a follow-up then check completion, given an evaluation already in state.
+
+    Decoupled from evaluate_answer so the evaluation can be cached or
+    self-consistency-checked without re-running the follow-up/control routing
+    (which is session-state-dependent and must run exactly once per answer).
+    """
+    graph = StateGraph(InterviewState)
+    graph.add_node("decide_follow_up", decide_follow_up)
+    graph.add_node("control_interview", control_interview)
+
+    graph.set_entry_point("decide_follow_up")
+    graph.add_conditional_edges(
+        "decide_follow_up",
+        route_after_follow_up,
+        {
+            "follow_up": END,  # pause — return the follow-up to the candidate
+            "next_question": "control_interview",
+        },
+    )
+    graph.add_edge("control_interview", END)
+    return graph.compile()
+
+
 async def build_state_from_db(
     session: CandidateSession,
     interview: Interview,

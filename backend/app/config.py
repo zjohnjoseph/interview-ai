@@ -32,5 +32,9 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
     llm_max_tokens: int = 1024
 
+    # Guardrails — token budgets
+    daily_token_budget: int = 100000
+    session_token_budget: int = 15000
+
 
 settings = Settings()

@@ -257,5 +257,12 @@ class LLMService:
 
         raise LLMProviderError("All LLM providers unavailable")
 
+    def circuit_states(self) -> dict[str, str]:
+        """Current circuit-breaker state per provider, for the health endpoint."""
+        return {
+            "groq": self._groq_breaker._state.name.lower(),
+            "gemini": self._gemini_breaker._state.name.lower(),
+        }
+
 
 llm_service = LLMService()

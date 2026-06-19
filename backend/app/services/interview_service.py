@@ -1,21 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.graph import (
-    build_evaluation_graph,
     build_first_question_graph,
     build_question_graph,
+    build_routing_graph,
     build_state_from_db,
 )
+from app.agents.state import InterviewState
 from app.models.database_models import CandidateSession, Interview, Response
 from app.models.schemas import (
     AnswerResponse,
@@ -26,8 +28,21 @@ from app.models.schemas import (
     SessionProgressResponse,
     SessionResultResponse,
 )
+from app.services.guardrails import (
+    TokenBudgetExceededError,
+    check_token_budget,
+    consistency_checked_evaluation,
+    record_tokens,
+    sanitize_answer,
+)
+from app.services.llm_service import llm_service
+from app.services.redis_service import redis_service
 
 logger = logging.getLogger(__name__)
+
+_STATE_TTL = 30 * 60  # session-state cache: 30 minutes
+_EVAL_TTL = 60 * 60  # evaluation cache: 1 hour
+_CONSERVE_HISTORY = 3  # Q&A pairs kept when conserving tokens
 
 _FALLBACK_EVALUATION = EvaluationResponse(
     score=5.0,
@@ -55,13 +70,37 @@ class InterviewService:
             created_at=datetime.now(timezone.utc),
         )
 
+    @staticmethod
+    async def _load_state(
+        session: CandidateSession, interview: Interview, db: AsyncSession
+    ) -> InterviewState:
+        """Reconstruct InterviewState, preferring the Redis cache over DB queries."""
+        key = redis_service.state_key(str(session.id))
+        cached = await redis_service.get_cached(key)
+        if cached is not None:
+            logger.info("State cache hit: %s", key)
+            return cast(InterviewState, cached)
+
+        logger.info("State cache miss: %s", key)
+        state = await build_state_from_db(session, interview, db)
+        await redis_service.set_cached(key, dict(state), ttl_seconds=_STATE_TTL)
+        return state
+
+    @staticmethod
+    async def _invalidate_state(session: CandidateSession) -> None:
+        await redis_service.delete(redis_service.state_key(str(session.id)))
+
     async def get_next_question(
         self,
         session: CandidateSession,
         interview: Interview,
         db: AsyncSession,
     ) -> NextQuestionResponse:
-        state = await build_state_from_db(session, interview, db)
+        mode = await check_token_budget(str(session.id))
+        if mode == "exceeded":
+            raise TokenBudgetExceededError
+
+        state = await self._load_state(session, interview, db)
         questions_asked = state.get("questions_asked", 0)
         remaining = max(interview.max_questions - questions_asked, 0)
 
@@ -79,19 +118,25 @@ class InterviewService:
                 completed=True, question=None, questions_remaining=0
             )
 
+        if mode == "conserve":
+            state["interview_history"] = state.get("interview_history", [])[-_CONSERVE_HISTORY:]
+
         # First question runs resume analysis first; later questions skip it.
         if not state.get("interview_history"):
             graph = build_first_question_graph(db)
         else:
             graph = build_question_graph(db)
 
+        tokens_before = llm_service.total_tokens
         result = await graph.ainvoke(state)
+        await record_tokens(str(session.id), llm_service.total_tokens - tokens_before)
         question = result.get("current_question") or {}
 
         # Persist the resume-derived profile on the first turn.
         profile = result.get("candidate_profile")
         if profile and not session.candidate_profile:
             session.candidate_profile = json.dumps(profile)
+            await self._invalidate_state(session)  # cached state lacks the new profile
 
         session.current_question_data = json.dumps(question)
 
@@ -114,7 +159,15 @@ class InterviewService:
         question: dict[str, Any] = json.loads(session.current_question_data)
         is_follow_up = bool(question.get("is_follow_up", False))
 
-        state = await build_state_from_db(session, interview, db)
+        answer_text, warnings = sanitize_answer(answer_text, str(session.id))
+        for w in warnings:
+            logger.info("Answer sanitization (session=%s): %s", session.id, w)
+
+        mode = await check_token_budget(str(session.id))
+        if mode == "exceeded":
+            raise TokenBudgetExceededError
+
+        state = await self._load_state(session, interview, db)
         state["current_question"] = question
         state["current_answer"] = answer_text
         # build_state_from_db counts follow-ups already persisted; the answer being
@@ -122,11 +175,31 @@ class InterviewService:
         state["follow_up_count"] = state.get("follow_up_count", 0) + (1 if is_follow_up else 0)
         # control_interview must see the count *after* this answer is recorded.
         state["questions_asked"] = state.get("questions_asked", 0) + (0 if is_follow_up else 1)
+        if mode == "conserve":
+            state["interview_history"] = state.get("interview_history", [])[-_CONSERVE_HISTORY:]
 
+        role_level = interview.role_level or ""
+        digest = hashlib.sha256(
+            (question.get("question_text", "") + answer_text + role_level).encode()
+        ).hexdigest()
+        eval_key = redis_service.eval_key(digest)
+
+        tokens_before = llm_service.total_tokens
         start = time.monotonic()
         try:
-            result = await build_evaluation_graph().ainvoke(state)
-            evaluation = result.get("current_evaluation") or _FALLBACK_EVALUATION.model_dump()
+            cached_eval = await redis_service.get_cached(eval_key)
+            if cached_eval is not None:
+                logger.info("Evaluation cache hit: %s", eval_key)
+                evaluation = cached_eval
+            else:
+                logger.info("Evaluation cache miss: %s", eval_key)
+                evaluation = await consistency_checked_evaluation(
+                    state, conserve=(mode == "conserve")
+                )
+                await redis_service.set_cached(eval_key, evaluation, ttl_seconds=_EVAL_TTL)
+
+            state["current_evaluation"] = evaluation
+            result = await build_routing_graph().ainvoke(state)
             needs_follow_up = bool(result.get("needs_follow_up", False))
             is_complete = bool(result.get("is_complete", False))
             follow_up_question = result.get("current_question") if needs_follow_up else None
@@ -138,6 +211,7 @@ class InterviewService:
             is_complete = state["questions_asked"] >= interview.max_questions
             follow_up_question = None
         latency_ms = round((time.monotonic() - start) * 1000)
+        await record_tokens(str(session.id), llm_service.total_tokens - tokens_before)
 
         corpus_id = question.get("corpus_question_id")
         response = Response(
@@ -165,6 +239,8 @@ class InterviewService:
                 session.completed_at = datetime.now(timezone.utc)
 
         await db.flush()
+        # A new response (and possibly completion) makes the cached state stale.
+        await self._invalidate_state(session)
 
         return AnswerResponse(
             response_id=response.id,
