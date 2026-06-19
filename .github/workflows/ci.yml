@@ -36,6 +36,9 @@ jobs:
       POSTGRES_USER: test
       POSTGRES_PASSWORD: test
       POSTGRES_DB: interviewai
+      GROQ_API_KEY:${{ secrets.GROQ_API_KEY }}
+      GEMINI_API_KEY:${{ secrets.GEMINI_API_KEY }}
+      JINA_API_KEY:${{ secrets.JINA_API_KEY }}
 
     steps:
       - uses: actions/checkout@v4
