@@ -1,8 +1,7 @@
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_session, get_current_user
@@ -10,24 +9,25 @@ from app.database import get_db
 from app.models.database_models import (
     CandidateSession,
     Interview,
-    Response,
     User,
 )
 from app.models.schemas import (
     AnswerResponse,
     AnswerSubmit,
-    EvaluationResponse,
     NextQuestionResponse,
-    QuestionResponse,
-    ResponseDetail,
     SessionProgressResponse,
     SessionResultResponse,
 )
+from app.services.interview_service import NoQuestionPendingError, interview_service
+from app.services.llm_service import LLMProviderError
 
 router = APIRouter(prefix="/api/sessions", tags=["Sessions"])
 
-_STUB_QUESTION_TEXT = "Placeholder — LLM question generation coming in Phase 2"
-_STUB_QUESTION_UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+async def _load_interview(session: CandidateSession, db: AsyncSession) -> Interview:
+    return (
+        await db.execute(select(Interview).where(Interview.id == session.interview_id))
+    ).scalar_one()
 
 
 @router.get("/{token}/next", response_model=NextQuestionResponse)
@@ -41,28 +41,14 @@ async def get_next_question(
     if session.status == "completed":
         return NextQuestionResponse(completed=True, question=None, questions_remaining=0)
 
-    interview = (
-        await db.execute(select(Interview).where(Interview.id == session.interview_id))
-    ).scalar_one()
-    answered = (
-        await db.execute(select(func.count()).where(Response.session_id == session.id))
-    ).scalar_one()
-    remaining = interview.max_questions - answered
-
-    if remaining <= 0:
-        return NextQuestionResponse(completed=True, question=None, questions_remaining=0)
-
-    return NextQuestionResponse(
-        completed=False,
-        question=QuestionResponse(
-            id=_STUB_QUESTION_UUID,
-            text=_STUB_QUESTION_TEXT,
-            domain="python",
-            difficulty="medium",
-            created_at=datetime.now(timezone.utc),
-        ),
-        questions_remaining=remaining,
-    )
+    interview = await _load_interview(session, db)
+    try:
+        return await interview_service.get_next_question(session, interview, db)
+    except LLMProviderError:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to generate question. Please try again in a moment.",
+        ) from None
 
 
 @router.post("/{token}/answers", response_model=AnswerResponse)
@@ -77,51 +63,15 @@ async def submit_answer(
     if session.status == "completed":
         raise HTTPException(status_code=400, detail="Interview already completed")
 
-    interview = (
-        await db.execute(select(Interview).where(Interview.id == session.interview_id))
-    ).scalar_one()
-    answered = (
-        await db.execute(select(func.count()).where(Response.session_id == session.id))
-    ).scalar_one()
-
-    if answered >= interview.max_questions:
-        raise HTTPException(status_code=400, detail="No more questions to answer")
-
-    is_last = (answered + 1) >= interview.max_questions
-
-    placeholder = EvaluationResponse(
-        score=0.0,
-        accuracy=0.0,
-        completeness=0.0,
-        clarity=0.0,
-        feedback="Evaluation pending — LLM integration in Phase 2",
-    )
-    response = Response(
-        session_id=session.id,
-        question_id=None,
-        question_text=_STUB_QUESTION_TEXT,
-        is_follow_up=False,
-        answer_text=body.answer_text,
-        score=placeholder.score,
-        accuracy=placeholder.accuracy,
-        completeness=placeholder.completeness,
-        clarity=placeholder.clarity,
-        feedback=placeholder.feedback,
-    )
-    db.add(response)
-
-    if is_last:
-        session.status = "completed"
-        session.completed_at = datetime.now(timezone.utc)
-
-    await db.flush()
-
-    return AnswerResponse(
-        response_id=response.id,
-        question_text=_STUB_QUESTION_TEXT,
-        evaluation=placeholder,
-        is_last_question=is_last,
-    )
+    interview = await _load_interview(session, db)
+    try:
+        return await interview_service.evaluate_and_record(
+            session, interview, body.answer_text, db
+        )
+    except NoQuestionPendingError:
+        raise HTTPException(
+            status_code=400, detail="No question pending. Call /next first."
+        ) from None
 
 
 @router.get("/{token}/progress", response_model=SessionProgressResponse)
@@ -130,25 +80,8 @@ async def get_progress(
     session: CandidateSession = Depends(get_current_session),
     db: AsyncSession = Depends(get_db),
 ) -> SessionProgressResponse:
-    interview = (
-        await db.execute(select(Interview).where(Interview.id == session.interview_id))
-    ).scalar_one()
-
-    scores = list(
-        (
-            await db.execute(
-                select(Response.score).where(Response.session_id == session.id)
-            )
-        ).scalars().all()
-    )
-    non_null = [s for s in scores if s is not None]
-    current_score = sum(non_null) / len(non_null) if non_null else None
-
-    return SessionProgressResponse(
-        total_questions=interview.max_questions,
-        answered_questions=len(scores),
-        current_score=current_score,
-    )
+    interview = await _load_interview(session, db)
+    return await interview_service.get_progress(session, interview, db)
 
 
 @router.get("/{session_id}/results", response_model=SessionResultResponse)
@@ -176,25 +109,4 @@ async def get_results(
     if interview is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    responses = list(
-        (
-            await db.execute(select(Response).where(Response.session_id == session.id))
-        ).scalars().all()
-    )
-
-    details = [ResponseDetail.model_validate(r) for r in responses]
-
-    non_null_scores = [r.score for r in responses if r.score is not None]
-    overall = sum(non_null_scores) / len(non_null_scores) if non_null_scores else 0.0
-
-    return SessionResultResponse(
-        session_id=session.id,
-        candidate_name=session.candidate_name,
-        candidate_email=session.candidate_email,
-        overall_score=overall,
-        total_questions=interview.max_questions,
-        answered_questions=len(responses),
-        responses=details,
-        started_at=session.started_at,
-        completed_at=session.completed_at,
-    )
+    return await interview_service.get_results(session, interview, db)

@@ -76,6 +76,64 @@ def disable_rate_limiter() -> None:
     limiter.enabled = False
 
 
+@pytest.fixture(autouse=True)
+def mock_llm_and_rag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the agent pipeline offline and deterministic in CI.
+
+    Replaces the real LLM call and the RAG hybrid search (which would hit the
+    Jina embedding API) so endpoint tests run without API keys. Real LLM/RAG
+    behaviour is covered locally by scripts/test_agents.py.
+    """
+    from typing import Any
+
+    from app.services.llm_service import llm_service
+    from app.services.rag_service import rag_service
+
+    def fake_call_llm(
+        prompt: str, system_prompt: str = "", response_model: Any = None
+    ) -> dict[str, Any]:
+        if "analyzing a candidate's resume" in prompt:
+            return {
+                "technical_skills": ["Python", "FastAPI", "PostgreSQL"],
+                "experience_years": 5,
+                "seniority_assessment": "senior",
+                "primary_languages": ["Python"],
+                "strengths": ["Backend APIs", "System design"],
+                "potential_gaps": ["Frontend", "ML"],
+                "experience_summary": "Experienced Python backend engineer.",
+            }
+        if "designing interview questions" in prompt:
+            return {
+                "question_text": "How would you design a rate limiter for a public API?",
+                "domain": "system_design",
+                "difficulty": "medium",
+                "reference_answer": "Token bucket or sliding window with a shared store.",
+                "corpus_question_id": None,
+                "reasoning": "Covers system design, a required skill.",
+            }
+        if "evaluating a candidate's answer" in prompt:
+            return {
+                "score": 7.5,
+                "accuracy": 8.0,
+                "completeness": 7.0,
+                "clarity": 7.5,
+                "feedback": "Solid answer covering the key concepts.",
+            }
+        if "deciding whether to probe" in prompt:
+            return {
+                "needs_follow_up": False,
+                "follow_up_question": None,
+                "reasoning": "Answer was sufficiently complete.",
+            }
+        return {}
+
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+    monkeypatch.setattr(llm_service, "call_llm", fake_call_llm)
+    monkeypatch.setattr(rag_service, "hybrid_search", fake_hybrid_search)
+
+
 @pytest_asyncio.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     """Raw DB session for direct manipulation (e.g. setting expires_at to the past).

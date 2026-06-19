@@ -129,6 +129,8 @@ class CandidateSession(Base):
     candidate_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     resume_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     candidate_profile: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # JSON-serialized question currently being asked — set by /next, read+cleared by /answers
+    current_question_data: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

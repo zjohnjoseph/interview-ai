@@ -99,6 +99,7 @@ async def build_state_from_db(
     interview_history: list[dict[str, Any]] = []
     topics_covered: list[str] = []
     questions_asked = 0
+    follow_up_count = 0  # trailing consecutive follow-ups for the current main question
     for r in responses:
         interview_history.append(
             {
@@ -109,8 +110,11 @@ async def build_state_from_db(
         )
         if r.domain and r.domain not in topics_covered:
             topics_covered.append(r.domain)
-        if not r.is_follow_up:
+        if r.is_follow_up:
+            follow_up_count += 1
+        else:
             questions_asked += 1
+            follow_up_count = 0
 
     return {
         "job_title": interview.job_title,
@@ -123,5 +127,5 @@ async def build_state_from_db(
         "interview_history": interview_history,
         "topics_covered": topics_covered,
         "questions_asked": questions_asked,
-        "follow_up_count": 0,
+        "follow_up_count": follow_up_count,
     }
