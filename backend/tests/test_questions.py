@@ -61,3 +61,15 @@ async def test_list_questions_pagination(
     r = await client.get("/api/questions?limit=2", headers=auth_headers)
     assert r.status_code == 200
     assert len(r.json()) == 2
+
+
+async def test_question_semantic_search(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    # RAG is mocked offline (hybrid_search → []), so we assert the contract:
+    # an authenticated query returns 200 and a list of results.
+    r = await client.get(
+        "/api/questions/search?q=python%20decorators", headers=auth_headers
+    )
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)

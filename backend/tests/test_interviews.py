@@ -191,3 +191,18 @@ async def test_upload_non_pdf(client: AsyncClient, auth_headers: dict[str, str])
         headers=auth_headers,
     )
     assert r.status_code == 400
+
+
+async def test_upload_oversized_resume(
+    client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    interview_id = await _publish_interview(client, auth_headers)
+
+    oversized = b"%PDF" + b"0" * (6 * 1024 * 1024)  # 6MB — over the 5MB cap
+    r = await client.post(
+        f"/api/interviews/{interview_id}/candidates",
+        data={"candidate_name": "Big", "candidate_email": "big@example.com"},
+        files={"resume": ("big.pdf", oversized, "application/pdf")},
+        headers=auth_headers,
+    )
+    assert r.status_code == 400

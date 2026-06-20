@@ -114,6 +114,22 @@ async def test_answer_after_completion(client: AsyncClient, sample_interview: di
     assert r.status_code == 400
 
 
+async def test_progress_endpoint(client: AsyncClient, sample_interview: dict) -> None:
+    """GET /{token}/progress reports answered count and a running score."""
+    token = sample_interview["token"]
+    await client.post(f"/api/sessions/{token}/join", json=_CANDIDATE)
+
+    for i in range(2):
+        await _next_then_answer(client, token, f"Answer {i}.")
+
+    r = await client.get(f"/api/sessions/{token}/progress")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["answered_questions"] == 2
+    assert data["total_questions"] == 8
+    assert data["current_score"] is not None
+
+
 async def test_follow_up_cap(
     client: AsyncClient, sample_interview: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
