@@ -39,7 +39,7 @@ class InterviewCreate(BaseModel):
     job_description: str = Field(min_length=50)
     required_skills: str = Field(min_length=5)
     role_level: Literal["junior", "mid", "senior"]
-    max_questions: int = Field(default=10, ge=8, le=15)
+    max_questions: int = Field(default=10, ge=3, le=15)
 
 
 class InterviewUpdate(BaseModel):
@@ -47,7 +47,7 @@ class InterviewUpdate(BaseModel):
     job_description: str | None = Field(default=None, min_length=50)
     required_skills: str | None = Field(default=None, min_length=5)
     role_level: Literal["junior", "mid", "senior"] | None = None
-    max_questions: int | None = Field(default=None, ge=8, le=15)
+    max_questions: int | None = Field(default=None, ge=3, le=15)
 
 
 class InterviewResponse(BaseModel):
