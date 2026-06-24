@@ -46,6 +46,7 @@ dist/
 
 # Progress
 Progress.md
+**/generation_progress.json
 
 backend/logs/
 

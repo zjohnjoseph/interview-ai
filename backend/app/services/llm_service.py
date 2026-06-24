@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from google import genai
 from google.genai import types
@@ -100,7 +100,9 @@ class LLMService:
         retry=retry_if_exception_type((RateLimitError, APIStatusError)),
         reraise=True,
     )
-    def _call_groq(self, prompt: str, system_prompt: str) -> tuple[str, int]:
+    def _call_groq(
+        self, prompt: str, system_prompt: str, max_tokens: int
+    ) -> tuple[str, int]:
         response = self._groq.chat.completions.create(
             model=settings.groq_model,
             messages=[
@@ -108,7 +110,7 @@ class LLMService:
                 {"role": "user", "content": prompt},
             ],
             temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
+            max_tokens=max_tokens,
         )
         text = response.choices[0].message.content or ""
         tokens = response.usage.total_tokens if response.usage else 0
@@ -120,14 +122,16 @@ class LLMService:
         retry=retry_if_exception_type(Exception),
         reraise=True,
     )
-    def _call_gemini(self, prompt: str, system_prompt: str) -> tuple[str, int]:
+    def _call_gemini(
+        self, prompt: str, system_prompt: str, max_tokens: int
+    ) -> tuple[str, int]:
         response = self._gemini.models.generate_content(
             model=settings.gemini_model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
                 temperature=settings.llm_temperature,
-                max_output_tokens=settings.llm_max_tokens,
+                max_output_tokens=max_tokens,
             ),
         )
         text = response.text or ""
@@ -174,12 +178,15 @@ class LLMService:
             "You are a technical interviewer AI. Return structured JSON only."
         ),
         response_model: type[BaseModel] | None = None,
+        provider: Literal["auto", "groq", "gemini"] = "auto",
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
-        # --- Try Groq first ---
-        if self._groq_breaker.is_available():
+        mt = max_tokens if max_tokens is not None else settings.llm_max_tokens
+        # --- Try Groq first (skipped when provider == "gemini") ---
+        if provider in ("auto", "groq") and self._groq_breaker.is_available():
             start = time.monotonic()
             try:
-                raw_text, tokens = self._call_groq(prompt, system_prompt)
+                raw_text, tokens = self._call_groq(prompt, system_prompt, mt)
                 self._groq_breaker.record_success()
                 self.total_tokens += tokens
                 latency_ms = round((time.monotonic() - start) * 1000)
@@ -215,11 +222,11 @@ class LLMService:
                     extra={"error": str(exc)},
                 )
 
-        # --- Fall back to Gemini ---
-        if self._gemini_breaker.is_available():
+        # --- Fall back to Gemini (skipped when provider == "groq") ---
+        if provider in ("auto", "gemini") and self._gemini_breaker.is_available():
             start = time.monotonic()
             try:
-                raw_text, tokens = self._call_gemini(prompt, system_prompt)
+                raw_text, tokens = self._call_gemini(prompt, system_prompt, mt)
                 self._gemini_breaker.record_success()
                 self.total_tokens += tokens
                 latency_ms = round((time.monotonic() - start) * 1000)

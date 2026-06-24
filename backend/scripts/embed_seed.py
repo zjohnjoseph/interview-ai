@@ -29,30 +29,43 @@ async def main() -> None:
         print("All questions already have embeddings. Nothing to do.")
         return
 
-    print(f"Embedding {len(questions)} questions via Jina...")
-    texts = [q.text for q in questions]
+    # Chunk so a large corpus doesn't go out in one oversized Jina call.
+    chunk_size = 500
+    total = len(questions)
+    print(f"Embedding {total} questions via Jina ({chunk_size}/chunk)...")
 
-    try:
-        vectors, tokens = await embedding_service.embed_batch(texts, task="retrieval.passage")
-    except EmbeddingError as exc:
-        print(f"Embedding failed: {exc}")
-        raise SystemExit(1) from exc
+    embedded = 0
+    for start in range(0, total, chunk_size):
+        chunk = questions[start:start + chunk_size]
+        texts = [q.text for q in chunk]
 
-    # Write session — re-fetch to get ORM instances attached to this session
-    async with async_session() as session:
-        result = await session.execute(
-            select(Question).where(Question.id.in_([q.id for q in questions]))
-        )
-        db_questions = {q.id: q for q in result.scalars().all()}
+        try:
+            vectors, tokens = await embedding_service.embed_batch(
+                texts, task="retrieval.passage"
+            )
+        except EmbeddingError as exc:
+            print(f"Embedding failed on chunk starting at {start}: {exc}")
+            raise SystemExit(1) from exc
 
-        for question, vector in zip(questions, vectors):
-            db_q = db_questions.get(question.id)
-            if db_q is not None:
-                db_q.embedding = vector
+        # Write session — re-fetch to get ORM instances attached to this session
+        async with async_session() as session:
+            result = await session.execute(
+                select(Question).where(Question.id.in_([q.id for q in chunk]))
+            )
+            db_questions = {q.id: q for q in result.scalars().all()}
 
-        await session.commit()
+            for question, vector in zip(chunk, vectors, strict=True):
+                db_q = db_questions.get(question.id)
+                if db_q is not None:
+                    db_q.embedding = vector
 
-    print(f"Done. Embedded {len(questions)} questions ({tokens:,} tokens used).")
+            await session.commit()
+
+        embedded += len(chunk)
+        print(f"  chunk {start // chunk_size + 1}: embedded {embedded}/{total} "
+              f"({tokens:,} tokens)")
+
+    print(f"Done. Embedded {embedded} questions.")
     print(f"Total tokens this session: {embedding_service.total_tokens:,}")
 
 

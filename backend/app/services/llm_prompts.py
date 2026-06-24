@@ -108,6 +108,46 @@ Return ONLY valid JSON. No markdown fences, no code blocks, no preamble, \
 no text outside the JSON object.\
 """
 
+SYNTHETIC_QUESTION_GENERATION_PROMPT = """\
+You are a senior technical interviewer building a high-quality question bank.
+
+Generate exactly {num_questions} unique technical interview questions for:
+- Domain: {domain}
+- Difficulty: {difficulty}
+- Target role level: {role_level}
+
+Requirements:
+- Each question must be practical and scenario-based ("Design a...", "Explain how \
+you would...", "How would you debug..."), NOT trivia ("What year was X released?").
+- Each question must include a detailed reference_answer of at least 3 full sentences \
+that a strong candidate would give.
+- Cover diverse sub-topics within the domain — do NOT repeat the same concept across \
+the questions in this batch.
+- Difficulty calibration:
+  - easy: fundamental concepts a {role_level} engineer should know cold
+  - medium: practical application, tradeoffs, and real-world decisions
+  - hard: complex system design, edge cases, and deep internals
+
+Avoid generating questions too similar to these topics already in the corpus:
+{existing_topics}
+
+Return a JSON object with exactly this structure (echo the domain and difficulty on \
+every question so the response is self-contained):
+{{
+  "questions": [
+    {{
+      "text": "the full interview question",
+      "domain": "{domain}",
+      "difficulty": "{difficulty}",
+      "reference_answer": "a complete model answer, at least 3 sentences"
+    }}
+  ]
+}}
+
+Return ONLY valid JSON. No markdown fences, no code blocks, no preamble, \
+no text outside the JSON object.\
+"""
+
 FOLLOW_UP_DECISION_PROMPT = """\
 You are a technical interviewer deciding whether to probe deeper or move on.
 
