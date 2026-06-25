@@ -1,9 +1,9 @@
 """
-Resumable synthetic interview-question generator (Gemini-backed).
+Resumable synthetic interview-question generator (OpenRouter-backed).
 
 Generates questions across a domain x difficulty x role-level grid, with exact-text
-deduplication, quality filtering, and progress tracking. Reserves the Groq quota for
-live interviews by calling Gemini directly (provider="gemini").
+deduplication, quality filtering, and progress tracking. Calls OpenRouter directly
+(provider="openrouter") so live-interview provider quotas stay untouched.
 
 Usage:
     docker compose run --rm api python -m scripts.generate_questions
@@ -19,7 +19,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from sqlalchemy import select
 
@@ -33,22 +33,37 @@ DOMAINS = ["python", "data_structures", "sql", "system_design", "ml", "apis"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 ROLE_LEVELS = ["junior", "mid", "senior"]
 
-# Groq-first: its limit is tokens/day (~100K), not requests, so it sustains bulk
-# generation far better than Gemini's ~20 requests/day. "auto" falls back to Gemini
-# when Groq is exhausted, combining both daily budgets.
-PROVIDER: Literal["auto", "groq", "gemini"] = "auto"
-# 15 Q&A pairs ≈ 3,150 tokens/batch → ~100K TPD / 3,150 ≈ ~30 batches ≈ ~450/day.
+# ── Sources ──────────────────────────────────────────────────────────────────
+# Three generators, tried in order. When one hits its daily limit the run rotates
+# to the next, so a single run drains all three free budgets. `model=None` uses the
+# provider's default (Groq → settings.groq_model = llama-3.3-70b-versatile).
+class Source(TypedDict):
+    name: str
+    provider: Literal["groq", "openrouter"]
+    model: str | None
+
+
+SOURCES: list[Source] = [
+    {"name": "gpt-oss", "provider": "openrouter", "model": "openai/gpt-oss-120b:free"},
+    {"name": "groq", "provider": "groq", "model": None},
+    {
+        "name": "nemotron",
+        "provider": "openrouter",
+        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+    },
+]
+
+# 15 Q&A pairs ≈ ~3,000 tokens/batch.
 BATCHES_PER_COMBO = 3
 QUESTIONS_PER_BATCH = 15
-SLEEP_SECONDS = 25          # ~3,150 tokens/batch; ~2.4/min stays under Groq's 12K TPM
-# Keep max_tokens + input under Groq's 12K TPM (16K triggers a 413 "request too large").
-MAX_OUTPUT_TOKENS = 8000
-# Backoff when a batch fails (usually a per-minute rate/token limit that resets shortly).
-FAILURE_BACKOFF_SECONDS = 60
-MAX_BATCH_RETRIES = 3       # retry the same batch this many times before skipping it
-# Stop only after a long failure streak — rides out transient per-minute Groq limits
-# instead of aborting the whole run when Gemini (fallback) is also exhausted.
-MAX_CONSECUTIVE_FAILURES = 24
+SLEEP_SECONDS = 20          # between successful batches
+MAX_OUTPUT_TOKENS = 8000    # also keeps Groq requests under its 12K tokens/min cap
+# Backoff when a batch fails (usually a transient per-minute rate/token limit).
+FAILURE_BACKOFF_SECONDS = 30
+MAX_BATCH_RETRIES = 2       # retries per batch before counting it a failure
+# After this many failed batches in a row on one source, rotate to the next source.
+# When the last source is exhausted too, stop.
+SOURCE_SWITCH_AFTER = 3
 
 # ── Quality filtering ────────────────────────────────────────────────────────
 _MIN_TEXT_CHARS = 20
@@ -154,8 +169,11 @@ async def main() -> None:
     session_generated = session_inserted = session_duplicates = 0
     start_time = time.monotonic()
     idx = 0
-    consecutive_failures = 0
+    source_idx = 0
+    consecutive_failed_batches = 0
     aborted = False
+    print(f"Sources (in order): {', '.join(s['name'] for s in SOURCES)}")
+    print(f"Active source: {SOURCES[0]['name']}\n")
 
     # Round-robin by batch so every domain fills evenly even if the run is interrupted.
     topics_cache: dict[str, str] = {}
@@ -183,42 +201,49 @@ async def main() -> None:
                     existing_topics=existing_topics,
                 )
 
-                # Retry the same batch with backoff — failures are usually a
-                # per-minute rate/token limit that resets within a minute.
+                # Try the active source, retrying with backoff for transient limits.
+                source = SOURCES[source_idx]
                 questions: list[dict[str, Any]] | None = None
                 for attempt in range(1, MAX_BATCH_RETRIES + 1):
                     try:
                         result = llm_service.call_llm(
                             prompt,
                             _SYSTEM_PROMPT,
-                            provider=PROVIDER,
+                            provider=source["provider"],
+                            model=source["model"],
                             max_tokens=MAX_OUTPUT_TOKENS,
                         )
                         questions = result.get("questions", [])
-                        consecutive_failures = 0
                         break
                     except Exception as exc:  # noqa: BLE001 — back off and retry/skip
-                        consecutive_failures += 1
                         print(
                             f"[{idx}/{total_batches}] {domain}/{difficulty}/{role_level} "
-                            f"(batch {batch}) ... FAILED "
-                            f"(attempt {attempt}, {consecutive_failures} in a row): {exc}"
+                            f"(batch {batch}) [{source['name']}] ... FAILED "
+                            f"(attempt {attempt}): {exc}"
                         )
-                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
-                            print(
-                                f"\n{MAX_CONSECUTIVE_FAILURES} consecutive failures — "
-                                "quota likely exhausted. Stopping; re-run later to resume."
-                            )
-                            aborted = True
-                            break
                         if attempt < MAX_BATCH_RETRIES:
                             time.sleep(FAILURE_BACKOFF_SECONDS)
 
-                if aborted:
-                    break
-                if questions is None:    # batch exhausted retries — leave it for next run
-                    time.sleep(FAILURE_BACKOFF_SECONDS)
+                if questions is None:
+                    # Batch failed all retries. Count it; rotate sources after a streak.
+                    consecutive_failed_batches += 1
+                    if consecutive_failed_batches >= SOURCE_SWITCH_AFTER:
+                        if source_idx + 1 < len(SOURCES):
+                            source_idx += 1
+                            consecutive_failed_batches = 0
+                            print(
+                                f"\n>>> '{source['name']}' looks exhausted — switching to "
+                                f"'{SOURCES[source_idx]['name']}'.\n"
+                            )
+                        else:
+                            print(
+                                "\nAll sources exhausted. Stopping; re-run later to resume."
+                            )
+                            aborted = True
+                            break
                     continue
+
+                consecutive_failed_batches = 0
 
                 generated = inserted = duplicates = 0
                 to_insert: list[dict[str, str]] = []
@@ -267,8 +292,8 @@ async def main() -> None:
 
                 print(
                     f"[{idx}/{total_batches}] {domain}/{difficulty}/{role_level} "
-                    f"(batch {batch}) ... {generated} generated, {inserted} inserted, "
-                    f"{duplicates} duplicates"
+                    f"(batch {batch}) [{source['name']}] ... {generated} generated, "
+                    f"{inserted} inserted, {duplicates} duplicates"
                 )
                 time.sleep(SLEEP_SECONDS)
     except KeyboardInterrupt:

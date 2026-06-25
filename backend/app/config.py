@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # LLM APIs
     groq_api_key: str = ""
     gemini_api_key: str = ""
+    openrouter_api_key: str = ""
+    openrouter_model: str = "meta-llama/llama-3.3-70b-instruct"
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     jina_api_key: str = ""
     jina_embedding_model: str = "jina-embeddings-v3"
     jina_reranker_model: str = "jina-reranker-v2-base-multilingual"

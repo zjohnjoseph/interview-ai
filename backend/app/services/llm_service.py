@@ -9,6 +9,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Any, Literal
 
+import httpx
 from google import genai
 from google.genai import types
 from groq import APIStatusError, Groq, RateLimitError
@@ -92,6 +93,7 @@ class LLMService:
         self._gemini = genai.Client(api_key=settings.gemini_api_key)
         self._groq_breaker = CircuitBreaker()
         self._gemini_breaker = CircuitBreaker()
+        self._openrouter_breaker = CircuitBreaker()
         self.total_tokens: int = 0
 
     @retry(
@@ -101,10 +103,10 @@ class LLMService:
         reraise=True,
     )
     def _call_groq(
-        self, prompt: str, system_prompt: str, max_tokens: int
+        self, prompt: str, system_prompt: str, max_tokens: int, model: str | None = None
     ) -> tuple[str, int]:
         response = self._groq.chat.completions.create(
-            model=settings.groq_model,
+            model=model or settings.groq_model,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt},
@@ -123,10 +125,10 @@ class LLMService:
         reraise=True,
     )
     def _call_gemini(
-        self, prompt: str, system_prompt: str, max_tokens: int
+        self, prompt: str, system_prompt: str, max_tokens: int, model: str | None = None
     ) -> tuple[str, int]:
         response = self._gemini.models.generate_content(
-            model=settings.gemini_model,
+            model=model or settings.gemini_model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,
@@ -140,6 +142,37 @@ class LLMService:
             if response.usage_metadata
             else 0
         )
+        return text, tokens
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=4),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.TransportError)),
+        reraise=True,
+    )
+    def _call_openrouter(
+        self, prompt: str, system_prompt: str, max_tokens: int, model: str | None = None
+    ) -> tuple[str, int]:
+        # Generous timeout — large reasoning models (e.g. Nemotron 550B) take minutes.
+        with httpx.Client(timeout=300.0) as client:
+            response = client.post(
+                f"{settings.openrouter_base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.openrouter_api_key}"},
+                json={
+                    "model": model or settings.openrouter_model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": settings.llm_temperature,
+                    "max_tokens": max_tokens,
+                },
+            )
+            response.raise_for_status()
+        data: dict[str, Any] = response.json()
+        text: str = data["choices"][0]["message"]["content"] or ""
+        usage: dict[str, Any] = data.get("usage") or {}
+        tokens: int = usage.get("total_tokens", 0)
         return text, tokens
 
     @staticmethod
@@ -178,15 +211,16 @@ class LLMService:
             "You are a technical interviewer AI. Return structured JSON only."
         ),
         response_model: type[BaseModel] | None = None,
-        provider: Literal["auto", "groq", "gemini"] = "auto",
+        provider: Literal["auto", "groq", "gemini", "openrouter"] = "auto",
         max_tokens: int | None = None,
+        model: str | None = None,
     ) -> dict[str, Any]:
         mt = max_tokens if max_tokens is not None else settings.llm_max_tokens
         # --- Try Groq first (skipped when provider == "gemini") ---
         if provider in ("auto", "groq") and self._groq_breaker.is_available():
             start = time.monotonic()
             try:
-                raw_text, tokens = self._call_groq(prompt, system_prompt, mt)
+                raw_text, tokens = self._call_groq(prompt, system_prompt, mt, model)
                 self._groq_breaker.record_success()
                 self.total_tokens += tokens
                 latency_ms = round((time.monotonic() - start) * 1000)
@@ -194,7 +228,7 @@ class LLMService:
                     "LLM call succeeded",
                     extra={
                         "provider": "groq",
-                        "model": settings.groq_model,
+                        "model": model or settings.groq_model,
                         "prompt_len": len(prompt),
                         "response_len": len(raw_text),
                         "latency_ms": latency_ms,
@@ -205,7 +239,7 @@ class LLMService:
                 _append_response_log({
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "provider": "groq",
-                    "model": settings.groq_model,
+                    "model": model or settings.groq_model,
                     "latency_ms": latency_ms,
                     "tokens": tokens,
                     "prompt": prompt,
@@ -218,7 +252,8 @@ class LLMService:
             except Exception as exc:
                 self._groq_breaker.record_failure()
                 logger.warning(
-                    "Groq call failed, falling back to Gemini",
+                    "Groq call failed%s",
+                    "; falling back to Gemini" if provider == "auto" else "",
                     extra={"error": str(exc)},
                 )
 
@@ -226,7 +261,7 @@ class LLMService:
         if provider in ("auto", "gemini") and self._gemini_breaker.is_available():
             start = time.monotonic()
             try:
-                raw_text, tokens = self._call_gemini(prompt, system_prompt, mt)
+                raw_text, tokens = self._call_gemini(prompt, system_prompt, mt, model)
                 self._gemini_breaker.record_success()
                 self.total_tokens += tokens
                 latency_ms = round((time.monotonic() - start) * 1000)
@@ -234,7 +269,7 @@ class LLMService:
                     "LLM call succeeded",
                     extra={
                         "provider": "gemini",
-                        "model": settings.gemini_model,
+                        "model": model or settings.gemini_model,
                         "prompt_len": len(prompt),
                         "response_len": len(raw_text),
                         "latency_ms": latency_ms,
@@ -245,7 +280,7 @@ class LLMService:
                 _append_response_log({
                     "ts": datetime.now(timezone.utc).isoformat(),
                     "provider": "gemini",
-                    "model": settings.gemini_model,
+                    "model": model or settings.gemini_model,
                     "latency_ms": latency_ms,
                     "tokens": tokens,
                     "prompt": prompt,
@@ -259,6 +294,46 @@ class LLMService:
                 self._gemini_breaker.record_failure()
                 logger.error(
                     "Gemini call failed",
+                    extra={"error": str(exc)},
+                )
+
+        # --- OpenRouter (explicit only; not part of the auto chain) ---
+        if provider == "openrouter" and self._openrouter_breaker.is_available():
+            start = time.monotonic()
+            try:
+                raw_text, tokens = self._call_openrouter(prompt, system_prompt, mt, model)
+                self._openrouter_breaker.record_success()
+                self.total_tokens += tokens
+                latency_ms = round((time.monotonic() - start) * 1000)
+                logger.info(
+                    "LLM call succeeded",
+                    extra={
+                        "provider": "openrouter",
+                        "model": model or settings.openrouter_model,
+                        "prompt_len": len(prompt),
+                        "response_len": len(raw_text),
+                        "latency_ms": latency_ms,
+                        "tokens": tokens,
+                    },
+                )
+                parsed = self._parse_response(raw_text, response_model)
+                _append_response_log({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "provider": "openrouter",
+                    "model": model or settings.openrouter_model,
+                    "latency_ms": latency_ms,
+                    "tokens": tokens,
+                    "prompt": prompt,
+                    "raw_response": raw_text,
+                    "parsed_response": parsed,
+                })
+                return parsed
+            except (LLMResponseParseError, LLMValidationError):
+                raise
+            except Exception as exc:
+                self._openrouter_breaker.record_failure()
+                logger.error(
+                    "OpenRouter call failed",
                     extra={"error": str(exc)},
                 )
 
