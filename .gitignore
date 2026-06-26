@@ -48,6 +48,9 @@ dist/
 Progress.md
 **/generation_progress.json
 
+# Local benchmarking toolkit (scripts, eval set, results — all local)
+benchmarking/
+
 backend/logs/
 
 graphify-out/

@@ -7,7 +7,7 @@ InterviewAI runs technical interviews end to end without a human in the loop. An
 - AI-generated interview questions tailored to the job description and candidate resume
 - Real-time answer evaluation with sub-scores (accuracy, completeness, clarity) and specific feedback
 - Adaptive follow-up probes on weak answers (capped at 2 per topic)
-- Hybrid RAG pipeline: pgvector similarity + PostgreSQL BM25 + Jina cross-encoder reranking
+- Hybrid RAG pipeline: pgvector similarity + PostgreSQL BM25 + Jina cross-encoder reranking — benchmarked at **0.90 MRR@5** retrieval on a 2,532-question corpus ([details](ARCHITECTURE.md#retrieval-performance))
 - Multi-agent orchestration with LangGraph (resume analysis → generation → evaluation → routing)
 - Groq (Llama 3.3) primary with Google Gemini fallback behind a circuit breaker
 - JWT authentication with per-route rate limiting

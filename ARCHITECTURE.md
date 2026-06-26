@@ -60,7 +60,19 @@ The Question Generator retrieves relevant corpus questions through a three-stage
 2. **Keyword search (BM25)** — PostgreSQL full-text search via `plainto_tsquery` / `ts_rank` against the `search_vector` column (GIN-indexed), with normalized scores.
 3. **Cross-encoder reranking** — Jina Reranker re-orders the merged candidate set by true query relevance.
 
-Hybrid beats either alone: vector search captures semantic similarity but misses exact-term matches; BM25 nails keywords but misses paraphrase; the reranker resolves the disagreement. If the embedding/reranker API is unavailable, the pipeline degrades to vector-only or keyword-only results.
+The intent of hybrid: vector search captures semantic similarity but misses exact-term matches; BM25 nails keywords but misses paraphrase; the reranker resolves the disagreement. If the embedding/reranker API is unavailable, the pipeline degrades to vector-only or keyword-only results.
+
+### Retrieval performance
+
+Measured on the full **2,532-question corpus** with **102 LLM-paraphrased test queries** (`benchmarking/`, local-only). Ground truth for each query is the source question it was paraphrased from, plus up to two embedding nearest-neighbors.
+
+| Pipeline | MRR@5 | Recall@5 | Hit-rate@5 |
+|---|---|---|---|
+| Vector only | **0.90** | 0.80 | 0.99 |
+| BM25 only | 0.49 | 0.28 | 0.52 |
+| Hybrid + reranker | 0.80 | 0.71 | 0.94 |
+
+**Interpretation.** Both embedding-based pipelines vastly outperform keyword-only BM25 (hybrid is **+64% MRR@5** over BM25), confirming dense retrieval is essential here. On this benchmark **vector-only edges out hybrid** (0.90 vs 0.80): the queries are semantic paraphrases of a single known question and the ground truth is partly embedding-defined, so dense search is graded on its home turf, and the reranker's reshuffling of merged BM25 candidates occasionally demotes the exact target. The hybrid path remains the production default for robustness across query types (exact keywords, rare terms, out-of-distribution phrasings) that this synthetic, paraphrase-only eval doesn't exercise. A fairer comparison would use human-judged relevance and a mix of keyword/semantic query types — noted as future work.
 
 ## Database schema
 
