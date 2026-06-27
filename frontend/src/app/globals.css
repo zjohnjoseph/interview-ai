@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+/* Functional MVP: keep it light-mode only, no dark-mode flips. */
+body {
+  color: #171717;
+  font-family: Arial, Helvetica, sans-serif;
+}

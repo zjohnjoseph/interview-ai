@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://redis:6379"
 
+    # CORS — comma-separated allowed origins ("*" = allow all, for dev)
+    cors_origins: str = "*"
+
     # JWT Auth
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
