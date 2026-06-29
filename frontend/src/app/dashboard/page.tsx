@@ -93,7 +93,7 @@ function CreateInterviewForm({ onCreated }: { onCreated: () => Promise<void> }) 
   const [jobDescription, setJobDescription] = useState("");
   const [requiredSkills, setRequiredSkills] = useState("");
   const [roleLevel, setRoleLevel] = useState("mid");
-  const [maxQuestions, setMaxQuestions] = useState(10);
+  const [maxQuestions, setMaxQuestions] = useState(5);
   const [submitting, setSubmitting] = useState(false);
 
   async function onSubmit(e: React.FormEvent) {
@@ -158,7 +158,7 @@ function CreateInterviewForm({ onCreated }: { onCreated: () => Promise<void> }) 
           </div>
           <div className="w-36">
             <label className="mb-1 block text-sm font-medium text-gray-700">Max questions</label>
-            <input className={input} type="number" min={8} max={15} value={maxQuestions}
+            <input className={input} type="number" min={3} max={15} value={maxQuestions}
               onChange={(e) => setMaxQuestions(Number(e.target.value))} />
           </div>
         </div>
